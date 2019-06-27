@@ -19,7 +19,29 @@ var checkDir = flag.String("dir", "", "sql injection check dir")
 
 // getPackagePaths get path contain package from root path
 func getPackagePaths(root string) ([]string, error) {
+	if strings.HasSuffix(root, "...") {
+		root = root[0 : len(root)-3]
+	} else {
+		return []string{root}, nil
+	}
+
+	paths := map[string]bool{}
+	err := filepath.Walk(root, func(path string, f os.FileInfo, err error) error {
+		if filepath.Ext(path) == ".go" {
+			path = filepath.Dir(path)
+			
+			paths[path] = true
+		}
+		return nil
+	})
+	if err != nil {
+		return []string{}, err
+	}
+
 	result := []string{}
+	for path := range paths {
+		result = append(result, path)
+	}
 	return result, nil
 }
 
@@ -255,11 +277,9 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 }
 
 func (si *Analyzer) check(pkg *packages.Package) {
-	//si.logger.Println("Checking package:", pkg.Name)
 	for _, file := range pkg.Syntax {
 		//si.logger.Println("Checking file:", pkg.Fset.File(file.Pos()).Name())
 		ast.Walk(si, file)
-		
 	}
 }
 
@@ -286,9 +306,10 @@ func (si *Analyzer) load(pkgPath string, conf *packages.Config) ([]*packages.Pac
 	si.logger.Println("Import directory:", abspath)
 	basePackage, err := build.Default.ImportDir(pkgPath, build.ImportComment)
 	if err != nil {
+		si.logger.Println("Import err:", err)
 		return []*packages.Package{}, fmt.Errorf("importing dir %q: %v", pkgPath, err)
 	}
-
+	
 	var packageFiles []string
 	for _, filename := range basePackage.GoFiles {
 		packageFiles = append(packageFiles, path.Join(pkgPath, filename))
@@ -304,7 +325,7 @@ func (si *Analyzer) load(pkgPath string, conf *packages.Config) ([]*packages.Pac
 		}
 	}
 	*/
-
+	
 	pkgs, err := packages.Load(conf, packageFiles...)
 	if err != nil {
 		return []*packages.Package{}, fmt.Errorf("loading files from package %q: %v", pkgPath, err)
@@ -318,22 +339,26 @@ func (gosec *Analyzer) pkgConfig(buildTags []string) *packages.Config {
 		tagsFlag := "-tags=" + strings.Join(buildTags, " ")
 		flags = append(flags, tagsFlag)
 	}
+	
 	return &packages.Config{
 		Mode:       packages.LoadSyntax,
+		//Mode:       packages.LoadFiles,
 		BuildFlags: flags,
 		Tests:      false,
 	}
 }
 
-func (si *Analyzer) Process(buildTags []string, packagePaths ...string) error {
+func (si *Analyzer) Process(buildTags []string, packagePaths [] string) error {
 	config := si.pkgConfig(buildTags)
 	for _, pkgPath := range packagePaths {
+		
 		pkgs, err := si.load(pkgPath, config)
 		if err != nil {
 			//si.AppendError(pkgPath, err)
-			fmt.Println(pkgPath, ":", err)
+			fmt.Println(pkgPath, " load error:", err)
 		}
 		for _, pkg := range pkgs {
+			// todo : analyze load error 
 			if pkg.Name != "" {
 				si.check(pkg)
 			}
@@ -343,5 +368,24 @@ func (si *Analyzer) Process(buildTags []string, packagePaths ...string) error {
 	return nil
 }
 
+func (si *Analyzer) CheckDir(d string) {
+	paths, err:= getPackagePaths(d)
+	if err != nil{
+		fmt.Println(err)
+	}
+	var buildTags []string
+	si.Process(buildTags, paths)
+}
+
 func main(){
+	flag.Parse()
+	si  := &Analyzer{
+		logger:	log.New(os.Stderr, "[sqlinj]", log.LstdFlags),
+		caseStack:   list.New(),
+		parameters:       make([]functionPara,1),
+		state:       StateMentAnalysis_START,
+		
+	}
+	si.CheckDir(*checkDir)
+	//fmt.Println(getPackagePaths(*checkDir))
 }
