@@ -1,12 +1,27 @@
 package main
 import (
 	"flag"
+	"errors"
 	"fmt"
+	"os"
+	"path"
+	"strings"
+	"path/filepath"
+	"log"
 	"container/list"
 	"go/ast"
+	"go/build"
+	
+	"golang.org/x/tools/go/packages"
 )
 
 var checkDir = flag.String("dir", "", "sql injection check dir")
+
+// getPackagePaths get path contain package from root path
+func getPackagePaths(root string) ([]string, error) {
+	result := []string{}
+	return result, nil
+}
 
 type functionPara struct{
 	pName string
@@ -30,6 +45,7 @@ type Analyzer struct {
 	curParaType   string
 	state       StateMentAnalysis
 	curFunName    string
+	logger      *log.Logger
 }
 
 func (si *Analyzer) isFunctionParaName() bool {
@@ -236,6 +252,95 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 		
 		return si
 	}
+}
+
+func (si *Analyzer) check(pkg *packages.Package) {
+	//si.logger.Println("Checking package:", pkg.Name)
+	for _, file := range pkg.Syntax {
+		//si.logger.Println("Checking file:", pkg.Fset.File(file.Pos()).Name())
+		ast.Walk(si, file)
+		
+	}
+}
+
+// GetPkgAbsPath returns the Go package absolute path derived from
+// the given path
+func GetPkgAbsPath(pkgPath string) (string, error) {
+	absPath, err := filepath.Abs(pkgPath)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return "", errors.New("no project absolute path found")
+	}
+	return absPath, nil
+}
+
+func (si *Analyzer) load(pkgPath string, conf *packages.Config) ([]*packages.Package, error) {
+	abspath, err := GetPkgAbsPath(pkgPath)
+	if err != nil {
+		si.logger.Printf("Skipping: %s. Path doesn't exist.", abspath)
+		return []*packages.Package{}, nil
+	}
+
+	si.logger.Println("Import directory:", abspath)
+	basePackage, err := build.Default.ImportDir(pkgPath, build.ImportComment)
+	if err != nil {
+		return []*packages.Package{}, fmt.Errorf("importing dir %q: %v", pkgPath, err)
+	}
+
+	var packageFiles []string
+	for _, filename := range basePackage.GoFiles {
+		packageFiles = append(packageFiles, path.Join(pkgPath, filename))
+	}
+
+	/*
+	if si.tests {
+		testsFiles := []string{}
+		testsFiles = append(testsFiles, basePackage.TestGoFiles...)
+		testsFiles = append(testsFiles, basePackage.XTestGoFiles...)
+		for _, filename := range testsFiles {
+			packageFiles = append(packageFiles, path.Join(pkgPath, filename))
+		}
+	}
+	*/
+
+	pkgs, err := packages.Load(conf, packageFiles...)
+	if err != nil {
+		return []*packages.Package{}, fmt.Errorf("loading files from package %q: %v", pkgPath, err)
+	}
+	return pkgs, nil
+}
+
+func (gosec *Analyzer) pkgConfig(buildTags []string) *packages.Config {
+	flags := []string{}
+	if len(buildTags) > 0 {
+		tagsFlag := "-tags=" + strings.Join(buildTags, " ")
+		flags = append(flags, tagsFlag)
+	}
+	return &packages.Config{
+		Mode:       packages.LoadSyntax,
+		BuildFlags: flags,
+		Tests:      false,
+	}
+}
+
+func (si *Analyzer) Process(buildTags []string, packagePaths ...string) error {
+	config := si.pkgConfig(buildTags)
+	for _, pkgPath := range packagePaths {
+		pkgs, err := si.load(pkgPath, config)
+		if err != nil {
+			//si.AppendError(pkgPath, err)
+			fmt.Println(pkgPath, ":", err)
+		}
+		for _, pkg := range pkgs {
+			if pkg.Name != "" {
+				si.check(pkg)
+			}
+		}
+	}
+	//sortErrors(si.errors)
+	return nil
 }
 
 func main(){
