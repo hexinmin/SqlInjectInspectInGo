@@ -183,58 +183,10 @@ func (di *DbInput) addParameter(input *DbInput) *DbInput{
 			di.paras = append(di.paras, input.paras[0])
 		}
 	}else{
-		panic(1)
+		//panic(1)
 	}
 
 	return di
-/*
-	if input.format != ""{
-		if pos, preChar, ok := di.getFormatPos(index); ok{
-			fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
-			if preChar == 's'{
-				// merge format
-				di.format = di.format[:pos] + input.format + di.format[pos + 2:]
-				di.paras = append(di.paras, input.paras...)
-			} else {
-				di.paras = append(di.paras, &functionPara{})
-			}
-		}
-	} else {
-		di.paras = append(di.paras, input.paras...)
-	}
-
-	return di
-
-	if input.format == ""{
-		fmt.Printf("hexinmin add parapter no format\n")
-		di.appendParas(input.paras)
-	} else{
-		// find format pos
-		fmt.Printf("hexinmin add with format 1\n")
-		if pos, preChar, ok := di.getFormatPos(index); ok{
-			fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
-			if preChar == 's'{
-				// merge format
-				fmt.Println("input format ", input.format)
-				di.format = di.format[:pos - 1] + input.format + di.format[pos + 1:]
-				fmt.Println("merge result ", di.format, " ", di.paras, " ", input.paras)
-				// merge parameters
-
-				newParas := di.paras[:index - 1]
-				newParas = append(newParas, input.paras...)
-				newParas = append(newParas, di.paras[index - 1:]...)
-				di.paras = newParas
-			}else{
-				// set empty parameter
-				di.paras[index - 1] = &functionPara{}
-			}
-			
-		}else{
-			panic(3)
-		}
-	}
-	return di
-	*/
 }
 
 func (di *DbInput) reportError(){
@@ -473,25 +425,29 @@ func (si *Analyzer) isDbInterfaceCall(n *ast.CallExpr) (string, string, bool) {
 	return "", "", false
 }
 
+func (si *Analyzer) analyzeDbCall(di *DbInput, ce *ast.CallExpr, index int){
+	for i, arg := range ce.Args{
+		if i == index{
+			addFormat := si.getDbInputFromRhs(arg)
+			fmt.Println("format is ", addFormat)
+			di = (*di).addFormat(addFormat)
+			fmt.Println("after add format di is ", di)
+		} else if i > index {
+			addPara := si.getDbInputFromRhs(arg)
+			fmt.Println("add para is ", addPara)
+			di = (*di).addParameter(addPara)
+			fmt.Println("after add para is ", di)
+		}
+	}
+}
+
 func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
 	di := &DbInput{}
 	switch iType{
 	case "*sqlx.DB":{
 			switch fName{
 			case "Get":{
-					for i, arg := range node.Args{
-						if i == 1{
-							addFormat := si.getDbInputFromRhs(arg)
-							fmt.Println("format is ", addFormat)
-							di = di.addFormat(addFormat)
-							fmt.Println("after add format di is ", di)
-						} else if i > 1 {
-							addPara := si.getDbInputFromRhs(arg)
-							fmt.Println("add para is ", addPara)
-							di = di.addParameter(addPara)
-							fmt.Println("after add para is ", di)
-						}
-					}
+					si.analyzeDbCall(di, node, 1)
 				}
 			}
 		}
