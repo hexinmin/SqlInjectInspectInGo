@@ -60,13 +60,20 @@ const (
 )
 
 type DbInput struct{
-	format string
+	format * string
 	paras [] *functionPara
-	
 }
 
 func (di *DbInput) String() string {
-	s := di.format + " " + "["
+	s := ""
+	if di.format == nil{
+		s = "(nil)"
+	}else
+	{
+		s = *di.format
+	}
+
+	s = s + " " + "["
 	for _, p := range di.paras{
 		s = s + " " + (*p).pName
 	}
@@ -84,7 +91,7 @@ func (di *DbInput) filterEmptyPara(){
 func (di *DbInput) getParaCountFromFormat() int {
 	count := 0
 	var pre rune
-	for i, c := range di.format{
+	for i, c := range *di.format{
 		if i > 0 && c == '%' && pre != '\\' {
 			count = count + 1
 		}
@@ -104,10 +111,10 @@ func (di *DbInput) getFirstEmpty(start int) (int, bool){
 
 // index from 1
 func (di *DbInput) getFormatPos(index int) (int, rune, bool){
-	count := 1
+	count := 0
 	var pre rune
 	found := false
-	for i, c := range di.format{
+	for i, c := range *di.format{
 		if found{
 			return i - 1, c, true
 		}
@@ -145,7 +152,42 @@ func (di *DbInput) addFormat(input *DbInput) *DbInput{
 	return di
 }
 
-func (di *DbInput) addParameter(index int, input *DbInput) *DbInput{
+func (di *DbInput) addParameter(input *DbInput) *DbInput{
+	if len(input.paras) > 0 || input.format != nil{
+		index := len(di.paras)
+		fmt.Println("format ", *di.format, " ", index)
+		if pos, preChar, ok := di.getFormatPos(index); ok{
+			fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
+			if preChar == 's'{
+				// merge format
+				if input.format == nil{
+					// only parameter
+					if len(input.paras) > 1{
+						panic(3)
+					}
+					di.paras = append(di.paras, input.paras[0])
+				} else {
+					// merge format
+					s := (*di.format)[:pos] + *input.format + (*di.format)[pos + 2:]
+					di.format = &s
+					di.paras = append(di.paras, input.paras...)
+				}
+			} else {
+				// format not change
+				di.paras = append(di.paras, &functionPara{})
+			}
+		} else {
+			if len(input.paras) > 1{
+				panic(3)
+			}
+			di.paras = append(di.paras, input.paras[0])
+		}
+	}else{
+		panic(1)
+	}
+
+	return di
+/*
 	if input.format != ""{
 		if pos, preChar, ok := di.getFormatPos(index); ok{
 			fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
@@ -162,7 +204,7 @@ func (di *DbInput) addParameter(index int, input *DbInput) *DbInput{
 	}
 
 	return di
-/*
+
 	if input.format == ""{
 		fmt.Printf("hexinmin add parapter no format\n")
 		di.appendParas(input.paras)
@@ -379,7 +421,7 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 							// add parameter
 							addParameter := si.getDbInputFromRhs(arg)
 							fmt.Printf("hexinmin i!= 0 %v\n", addParameter)
-							di = di.addParameter(i, addParameter)
+							di = di.addParameter(addParameter)
 						}
 					}
 				}
@@ -391,7 +433,7 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 		s := v.Value
 		s = s[1:len(s)-1]
 		return &DbInput{
-			format: s,
+			format: &s,
 		}
 	}
 
@@ -446,7 +488,7 @@ func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
 						} else if i > 1 {
 							addPara := si.getDbInputFromRhs(arg)
 							fmt.Println("add para is ", addPara)
-							di = di.addParameter(i - 1, addPara)
+							di = di.addParameter(addPara)
 							fmt.Println("after add para is ", di)
 						}
 					}
@@ -518,7 +560,7 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 					// del right
 					dbInput := si.getDbInputFromRhs(node.Rhs[0])
 					fmt.Println("new db input ", dbInput)
-					if dbInput.format != ""{
+					if dbInput.format != nil{
 						if v, ok := node.Lhs[0].(*ast.Ident); ok{
 							si.allPossibleInput[v.Name] = dbInput
 							fmt.Println("allPossibleInput add ", dbInput)
