@@ -65,6 +65,15 @@ type DbInput struct{
 	
 }
 
+func (di *DbInput) String() string {
+	s := di.format + " " + "["
+	for _, p := range di.paras{
+		s = s + " " + (*p).pName
+	}
+	s = s + "]"
+    return s
+}
+
 func (di *DbInput) filterEmptyPara(){
 	c := di.getParaCountFromFormat()
 	for i:= len(di.paras); i < c; i++{
@@ -138,13 +147,13 @@ func (di *DbInput) addParameter(index int, input *DbInput) *DbInput{
 			if preChar == 's'{
 				// merge format
 				di.format = di.format[:pos - 1] + input.format + di.format[pos + 1:]
-				di.paras = append(input.paras, di.paras...)
+				di.paras = append(di.paras, input.paras...)
 			} else {
-				di.paras = append(input.paras, &functionPara{})
+				di.paras = append(di.paras, &functionPara{})
 			}
 		}
 	} else {
-		di.paras = append(input.paras, di.paras...)
+		di.paras = append(di.paras, input.paras...)
 	}
 
 	return di
