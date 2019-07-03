@@ -106,10 +106,15 @@ func (di *DbInput) getFirstEmpty(start int) (int, bool){
 func (di *DbInput) getFormatPos(index int) (int, rune, bool){
 	count := 1
 	var pre rune
+	found := false
 	for i, c := range di.format{
+		if found{
+			return i - 1, c, true
+		}
 		if i > 0 && c == '%' && pre != '\\' {
 			if count == index{
-				return i, pre, true
+				//return i, pre, true
+				found = true
 			}
 			count = count + 1
 		}
@@ -146,7 +151,7 @@ func (di *DbInput) addParameter(index int, input *DbInput) *DbInput{
 			fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
 			if preChar == 's'{
 				// merge format
-				di.format = di.format[:pos - 1] + input.format + di.format[pos + 1:]
+				di.format = di.format[:pos] + input.format + di.format[pos + 2:]
 				di.paras = append(di.paras, input.paras...)
 			} else {
 				di.paras = append(di.paras, &functionPara{})
