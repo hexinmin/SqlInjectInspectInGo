@@ -95,6 +95,10 @@ func (di *DbInput) String() string {
 	return s
 }
 
+func (di *DbInput) Empty() bool {
+	return di.format == nil && len(di.paras) == 0 && di.next == nil
+}
+
 func (di *DbInput) appendTail(v *DbInput) *DbInput {
 	// get tail
 	if (*di).next == nil{
@@ -239,6 +243,22 @@ func (di *DbInput) addFormat(input *DbInput) *DbInput{
 }
 
 func (di *DbInput) addParameter(input *DbInput) *DbInput{
+	if (*input).next == nil{
+		return di.addParameterSingle(input)
+	}else{
+		n := (*input).next
+		for{
+			if n == input{
+				break
+			}
+			di = di.addParameterSingle(n)
+			n = (*n).next
+		}
+		return di
+	}
+}
+
+func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
 	if len(input.paras) > 0 || input.format != nil{
 		index := len(di.paras)
 		//fmt.Println("format ", *di.format, " ", index)
@@ -464,6 +484,7 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 					di = si.getDbInputFromRhs(callexp.Args[0])
 					join := si.getDbInputFromRhs(callexp.Args[1])
 					(*di).likeStringJoin(join)
+					di = di.merge()
 				}
 			}
 		} else if f, ok := callexp.Fun.(*ast.Ident); ok{
@@ -633,7 +654,7 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 				if si.state == StateMentAnalysis_FUNCTION_BODY{
 					// del right
 					dbInput := si.getDbInputFromRhs(node.Rhs[0])
-					if dbInput.format != nil{
+					if !dbInput.Empty(){
 						if v, ok := node.Lhs[0].(*ast.Ident); ok{
 							si.allPossibleInput[v.Name] = dbInput
 							fmt.Println("allPossibleInput add ", dbInput)
@@ -796,9 +817,10 @@ func unittest(){
 }
 
 func main(){
+	/*
 	unittest()
 	return
-
+*/
 	flag.Parse()
 	si  := &Analyzer{
 		logger:	log.New(os.Stderr, "[sqlinj]", log.LstdFlags),
