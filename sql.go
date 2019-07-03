@@ -155,9 +155,9 @@ func (di *DbInput) addFormat(input *DbInput) *DbInput{
 func (di *DbInput) addParameter(input *DbInput) *DbInput{
 	if len(input.paras) > 0 || input.format != nil{
 		index := len(di.paras)
-		fmt.Println("format ", *di.format, " ", index)
+		//fmt.Println("format ", *di.format, " ", index)
 		if pos, preChar, ok := di.getFormatPos(index); ok{
-			fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
+			//fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
 			if preChar == 's'{
 				// merge format
 				if input.format == nil{
@@ -367,12 +367,10 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 						if i == 0{
 							// ad format
 							addFormat := si.getDbInputFromRhs(arg)
-							fmt.Printf("hexinmin %v\n", addFormat)
 							di = di.addFormat(addFormat)
 						} else {
 							// add parameter
 							addParameter := si.getDbInputFromRhs(arg)
-							fmt.Printf("hexinmin i!= 0 %v\n", addParameter)
 							di = di.addParameter(addParameter)
 						}
 					}
@@ -405,7 +403,7 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 
 func (si *Analyzer) AddDbCallPara(n string, t string){
 	switch t{
-	case "*sqlx.DB", "sqlx.Tx":
+	case "*sqlx.DB", "*sqlx.Tx":
 		{
 			if _, ok := si.dbCallPara[n]; !ok{
 				si.dbCallPara[n] = t
@@ -429,14 +427,10 @@ func (si *Analyzer) analyzeDbCall(di *DbInput, ce *ast.CallExpr, index int){
 	for i, arg := range ce.Args{
 		if i == index{
 			addFormat := si.getDbInputFromRhs(arg)
-			fmt.Println("format is ", addFormat)
 			di = (*di).addFormat(addFormat)
-			fmt.Println("after add format di is ", di)
 		} else if i > index {
 			addPara := si.getDbInputFromRhs(arg)
-			fmt.Println("add para is ", addPara)
 			di = (*di).addParameter(addPara)
-			fmt.Println("after add para is ", di)
 		}
 	}
 }
@@ -445,13 +439,20 @@ func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
 	di := &DbInput{}
 	switch iType{
 	case "*sqlx.DB":{
-			switch fName{
+		switch fName{
 			case "Get":{
 					si.analyzeDbCall(di, node, 1)
 				}
 			}
 		}
-	}
+	case "*sqlx.Tx":{
+		switch fName{
+			case "Exec":{
+					si.analyzeDbCall(di, node, 0)
+				}
+			}
+		}
+	}	
 	fmt.Println("final di is ", di)
 }
 
@@ -515,7 +516,6 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 				if si.state == StateMentAnalysis_FUNCTION_BODY{
 					// del right
 					dbInput := si.getDbInputFromRhs(node.Rhs[0])
-					fmt.Println("new db input ", dbInput)
 					if dbInput.format != nil{
 						if v, ok := node.Lhs[0].(*ast.Ident); ok{
 							si.allPossibleInput[v.Name] = dbInput
