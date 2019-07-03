@@ -62,9 +62,10 @@ const (
 type DbInput struct{
 	format * string
 	paras [] *functionPara
+	next * DbInput
 }
 
-func (di *DbInput) String() string {
+func (di *DbInput) toString() string {
 	s := ""
 	if di.format == nil{
 		s = "(nil)"
@@ -79,6 +80,59 @@ func (di *DbInput) String() string {
 	}
 	s = s + "]"
     return s
+}
+
+func (di *DbInput) String() string {
+	dump := di
+	s := (*dump).toString()	
+	for{
+		if (*dump).next == di || (*dump).next== nil{
+			break
+		}
+		dump = (*dump).next
+		s = s + " --> " + (*dump).toString()
+	}
+	return s
+}
+
+func (di *DbInput) appendTail(v *DbInput) *DbInput {
+	// get tail
+	if (*di).next == nil{
+		panic(1)
+	}
+	tail := (*di).next
+	for{
+		if (*tail).next == di{
+			break
+		}
+		tail = (*tail).next
+	}
+	(*tail).next = v
+	(*v).next = di
+	return di
+}
+
+func (di *DbInput) likeStringJoin(v *DbInput) *DbInput {
+	// deep copy
+	if (*di).next == nil{
+		panic(1)
+	}
+	n1 := (*di).next
+	n2 := (*n1).next
+	for{
+		if n1 == n2 || n2 == di{
+			break
+		}
+		newV := &DbInput{
+			format: (*v).format,
+			paras : (*v).paras,
+		}
+		(*n1).next = newV
+		(*newV).next = n2
+		n1 = n2
+		n2 = (*n1).next
+	}
+	return di
 }
 
 func (di *DbInput) filterEmptyPara(){
@@ -144,6 +198,38 @@ func (di *DbInput) appendParas(paras [] *functionPara) {
 			di.paras = append(di.paras, p1)
 		}
 	}
+}
+
+func (di *DbInput) concat(input *DbInput)*DbInput{
+	// merge format
+	s := (*di).format
+	if (*di).format != nil{
+		s = &(*(*di).format)
+	}
+	if (*input).format != nil{
+		if s == nil{
+			s = &(*(*input).format)
+		}else{
+			*s = *s + *(*input).format
+		}
+	}
+	(*di).format = s
+	di.paras = append(di.paras, input.paras...) 
+	// merge paras
+	return di
+}
+
+func (di *DbInput) merge() *DbInput{
+	r := &DbInput{}
+	n := (*di).next
+	for{
+		if n == nil || n == di{
+			break
+		}
+		r = (*r).concat(n)
+		n = (*n).next
+	}
+	return r
 }
 
 func (di *DbInput) addFormat(input *DbInput) *DbInput{
@@ -374,21 +460,31 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 							di = di.addParameter(addParameter)
 						}
 					}
+				} else if x.Name == "strings" && f.Sel.Name == "Join"{
+					di = si.getDbInputFromRhs(callexp.Args[0])
+					join := si.getDbInputFromRhs(callexp.Args[1])
+					(*di).likeStringJoin(join)
+				}
+			}
+		} else if f, ok := callexp.Fun.(*ast.Ident); ok{
+			if f.Name == "append"{
+				for i, arg := range callexp.Args{
+					if i == 0{
+						di = si.getDbInputFromRhs(arg)
+					} else {
+						new := si.getDbInputFromRhs(arg)
+						(*di).appendTail(new)
+					}
 				}
 			}
 		}
-	}
-	// plain text
-	if v, ok := n.(*ast.BasicLit); ok {
+	}else if v, ok := n.(*ast.BasicLit); ok { // plain text
 		s := v.Value
 		s = s[1:len(s)-1]
 		return &DbInput{
 			format: &s,
 		}
-	}
-
-	// *ast.Ident
-	if v, ok := n.(*ast.Ident); ok{
+	}else if v, ok := n.(*ast.Ident); ok{ // *ast.Ident
 		if k, ok := si.allPossibleInput[v.Name]; ok{
 			return k
 		} else {
@@ -396,7 +492,28 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 				paras: [] *functionPara {&functionPara{pName:v.Name,},},
 			}
 		}
+	}else if v, ok := n.(*ast.CompositeLit); ok{
+		if Type, ok := v.Type.(*ast.ArrayType); ok{
+			switch Elt := Type.Elt.(type) {
+				case *ast.Ident:{
+					// []string{}
+					if Elt.Name == "string"{
+						di = &DbInput{}
+						(*di).next = di
+					}	
+				}
+				case *ast.InterfaceType:{
+					// []interface{}{}
+					if !Elt.Incomplete{
+						di = &DbInput{}
+						(*di).next = di
+					}
+				}
+			}
+		}
 	}
+	// []interface{}{}
+	
 	// to do else
 	return di
 }
@@ -630,7 +747,58 @@ func (si *Analyzer) CheckDir(d string) {
 	si.Process(buildTags, paths)
 }
 
+func unittest(){
+	s1 := "xxx"
+	s2 := "yyyy"
+	s3 := "zzzz"
+	di1 := &DbInput{
+		format: &s1,
+		paras: [] *functionPara {&functionPara{pName:"xxxx",},},
+	}
+
+	fmt.Println("di1 :", di1)
+
+	di2 := &DbInput{
+		format: nil,
+		paras: [] *functionPara {&functionPara{pName:"xxxx",},},
+	}
+
+	fmt.Println("di2 :", di2)
+	di3 := (*di1).concat(di2)
+	fmt.Println("di3 :", di3)
+
+	(*di1).next = di1
+	di4 := di1.appendTail(di2)
+	fmt.Println("di4 :", di4)
+
+	di5 := &DbInput{
+	}
+	(*di5).next = di5
+
+	di5 = di5.appendTail(&DbInput{
+		format: &s1,
+		paras: [] *functionPara {&functionPara{pName:"xxxx",},},
+	})
+	di5 = di5.appendTail(&DbInput{
+		format: &s2,
+		paras: [] *functionPara {&functionPara{pName:"yyyy",},},
+	})
+	fmt.Println("di5 :", di5)
+
+	di6 := di5.likeStringJoin(&DbInput{
+		format: &s3,
+		paras: [] *functionPara {&functionPara{pName:"zzz",},},
+	})
+	fmt.Println("di6 :", di6)
+
+	di7 := di6.merge()
+	fmt.Println("di7 :", di7)
+}
+
 func main(){
+	unittest()
+	return
+
 	flag.Parse()
 	si  := &Analyzer{
 		logger:	log.New(os.Stderr, "[sqlinj]", log.LstdFlags),
