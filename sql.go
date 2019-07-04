@@ -416,6 +416,54 @@ func (di *DbInput) addDbCallParameterSingle(input *DbInput) *DbInput{
 func (di *DbInput) reportError(){
 }
 
+type ExtraceName struct {
+	result  string
+	selectFlag bool
+	caseStack   *list.List
+}
+
+func NewExtraceName() *ExtraceName{
+	return &ExtraceName{
+		selectFlag : false,
+		caseStack:   list.New(),}
+}
+
+func (en *ExtraceName) Visit(n ast.Node) ast.Visitor {
+	if n == nil{
+		en.upDateStateAfterPop()
+		return nil
+	} else {
+		en.caseStack.PushBack(n)
+		switch t:= n.(type){
+		case *ast.Ident:{
+				en.result = en.result + t.Name
+			}
+		case *ast.StarExpr:{
+				en.result = en.result + "*"
+			}
+		case *ast.ArrayType:{
+				en.result = en.result + "[]"
+			}
+		case *ast.SelectorExpr:{
+			en.selectFlag = true
+		}
+		}
+	}
+	return en
+}
+
+func (en *ExtraceName) upDateStateAfterPop(){
+	e := en.caseStack.Back()
+	en.caseStack.Remove(e)
+	if last := en.caseStack.Back(); last != nil{
+		if _, ok := last.Value.(*ast.SelectorExpr); ok{
+			if en.selectFlag{
+				en.result = en.result + "."
+				en.selectFlag = false
+			}
+		}
+	}
+}
 
 type Analyzer struct {
 	ignoreNosec bool
@@ -486,6 +534,7 @@ func (si *Analyzer) ChangeState(s StateMentAnalysis){
 	si.state = s
 }
 
+// todo : delete
 func getParaType(f ast.Field) string {
 	result := ""
 	switch t:= f.Type.(type){
@@ -757,11 +806,13 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 					si.ChangeState(StateMentAnalysis_FUNCTION)
 				}
 				for _, para := range node.Type.Params.List{
+					en := NewExtraceName()
+					ast.Walk(en, para.Type)
+					fmt.Println("para type:", en.result)
 					si.parameters = append(si.parameters, 
-						functionPara{pName:para.Names[0].Name, pType:getParaType(*para)})
-					si.AddDbCallPara(para.Names[0].Name, getParaType(*para))
+						functionPara{pName:para.Names[0].Name, pType:en.result})
+					si.AddDbCallPara(para.Names[0].Name, en.result)
 				}
-				fmt.Println(si.parameters)
 			case *ast.BlockStmt:{
 				if	si.state == StateMentAnalysis_FUNCTION{
 					si.ChangeState(StateMentAnalysis_FUNCTION_BODY)
