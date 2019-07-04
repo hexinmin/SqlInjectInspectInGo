@@ -716,6 +716,12 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 				}
 			}
 		}
+	}else{
+		en := NewExtraceName()
+		ast.Walk(en, n)
+		if en.result != ""{
+			di.paras = append(di.paras, &functionPara{pName:en.result,})
+		}
 	}
 	// []interface{}{}
 	
@@ -808,7 +814,7 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 				for _, para := range node.Type.Params.List{
 					en := NewExtraceName()
 					ast.Walk(en, para.Type)
-					fmt.Println("para type:", en.result)
+					//fmt.Println("para type:", en.result)
 					si.parameters = append(si.parameters, 
 						functionPara{pName:para.Names[0].Name, pType:en.result})
 					si.AddDbCallPara(para.Names[0].Name, en.result)
