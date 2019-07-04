@@ -11,6 +11,7 @@ import (
 	"container/list"
 	"go/ast"
 	"go/build"
+	"go/token"
 	
 	"golang.org/x/tools/go/packages"
 )
@@ -48,8 +49,24 @@ func getPackagePaths(root string) ([]string, error) {
 type functionPara struct{
 	pName string
 	pType string
-	di * DbInput
+	conflation [] *functionPara
 }
+
+func (fp *functionPara) String() string {
+	s := fp.pName
+	for _, p := range fp.conflation{
+		s = s + "#" + (*p).String()
+	}
+	if s == ""{
+		s = "∅"
+	}
+	return s
+}
+
+func (fp *functionPara) conflate(v *functionPara){
+	fp.conflation = append(fp.conflation, v)
+}
+
 
 type StateMentAnalysis int 
 const (
@@ -76,7 +93,7 @@ func (di *DbInput) toString() string {
 
 	s = s + " " + "["
 	for _, p := range di.paras{
-		s = s + " " + (*p).pName
+		s = s + " " + (*p).String()
 	}
 	s = s + "]"
     return s
@@ -93,6 +110,16 @@ func (di *DbInput) String() string {
 		s = s + " --> " + (*dump).toString()
 	}
 	return s
+}
+
+func (di *DbInput) updateForAdd(){
+	if di.Empty(){
+		panic(1)
+	}
+	if len(di.paras) > 0 && ((*di).format == nil){
+		s := "%s"
+		di.format = &s
+	}
 }
 
 func (di *DbInput) Empty() bool {
@@ -167,7 +194,7 @@ func (di *DbInput) getFirstEmpty(start int) (int, bool){
 	return 0, false
 }
 
-// index from 1
+// getFormatPos index from 0, only for %x
 func (di *DbInput) getFormatPos(index int) (int, rune, bool){
 	count := 0
 	var pre rune
@@ -177,6 +204,32 @@ func (di *DbInput) getFormatPos(index int) (int, rune, bool){
 			return i - 1, c, true
 		}
 		if i > 0 && c == '%' && pre != '\\' {
+			if count == index{
+				//return i, pre, true
+				found = true
+			}
+			count = count + 1
+		}
+		pre = c
+	}
+	return 0, pre, false
+}
+
+// getFormatOrQuestionMarkPos both find %x and ?
+func (di *DbInput) getFormatOrQuestionMarkPos(index int) (int, rune, bool){
+	count := 0
+	var pre rune
+	found := false
+	for i, c := range *di.format{
+		if found{
+			return i - 1, c, true
+		}
+		if c == '?'{
+			if count == index{
+				return i, c, true
+			}
+			count = count + 1
+		} else if i > 0 && c == '%' && pre != '\\' {
 			if count == index{
 				//return i, pre, true
 				found = true
@@ -258,11 +311,64 @@ func (di *DbInput) addParameter(input *DbInput) *DbInput{
 	}
 }
 
+func (di *DbInput) addDbcallParameter(input *DbInput) *DbInput{
+	if (*input).next == nil{
+		return di.addDbCallParameterSingle(input)
+	}else{
+		n := (*input).next
+		for{
+			if n == input{
+				break
+			}
+			di = di.addDbCallParameterSingle(n)
+			n = (*n).next
+		}
+		return di
+	}
+}
+
 func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
 	if len(input.paras) > 0 || input.format != nil{
 		index := len(di.paras)
 		//fmt.Println("format ", *di.format, " ", index)
 		if pos, preChar, ok := di.getFormatPos(index); ok{
+			//fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
+			if preChar == 's'{
+				// merge format
+				if input.format == nil{
+					// only parameter
+					if len(input.paras) > 1{
+						panic(*di)
+					}
+					di.paras = append(di.paras, input.paras[0])
+				} else {
+					// merge format
+					s := (*di.format)[:pos] + *input.format + (*di.format)[pos + 2:]
+					di.format = &s
+					di.paras = append(di.paras, input.paras...)
+				}
+			} else {
+				// format not change
+				di.paras = append(di.paras, &functionPara{})
+			}
+		} else {
+			//if len(input.paras) > 1{
+				panic(*di)
+			//}
+			//di.paras = append(di.paras, input.paras[0])
+		}
+	}else{
+		//panic(1)
+	}
+
+	return di
+}
+
+func (di *DbInput) addDbCallParameterSingle(input *DbInput) *DbInput{
+	if len(input.paras) > 0 || input.format != nil{
+		index := len(di.paras)
+		//fmt.Println("format ", *di.format, " ", index)
+		if pos, preChar, ok := di.getFormatOrQuestionMarkPos(index); ok{
 			//fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
 			if preChar == 's'{
 				// merge format
@@ -278,20 +384,32 @@ func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
 					di.format = &s
 					di.paras = append(di.paras, input.paras...)
 				}
-			} else {
+			}else if preChar == '?'{
+				// neglect input format, can not unfold
+				p := &functionPara{}
+				if len(input.paras) > 0{
+					p = input.paras[0]
+					for i, ip := range input.paras{
+						if i > 0{
+							p.conflate(ip)
+						}
+					}
+				}
+				//fmt.Println("append parameter :", *p, " ", (*input).String())
+				di.paras = append(di.paras, p)
+			}else{
 				// format not change
 				di.paras = append(di.paras, &functionPara{})
 			}
 		} else {
-			if len(input.paras) > 1{
+			//if len(input.paras) > 1{
 				panic(3)
-			}
-			di.paras = append(di.paras, input.paras[0])
+			//}
+			//di.paras = append(di.paras, input.paras[0])
 		}
 	}else{
 		//panic(1)
 	}
-
 	return di
 }
 
@@ -499,6 +617,14 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 				}
 			}
 		}
+	}else if v, ok := n.(*ast.BinaryExpr); ok {
+		if v.Op == token.ADD{
+			X := si.getDbInputFromRhs(v.X)
+			Y := si.getDbInputFromRhs(v.Y)
+			(*X).updateForAdd()
+			(*Y).updateForAdd()
+			di = (*X).concat(Y)
+		}
 	}else if v, ok := n.(*ast.BasicLit); ok { // plain text
 		s := v.Value
 		s = s[1:len(s)-1]
@@ -568,7 +694,7 @@ func (si *Analyzer) analyzeDbCall(di *DbInput, ce *ast.CallExpr, index int){
 			di = (*di).addFormat(addFormat)
 		} else if i > index {
 			addPara := si.getDbInputFromRhs(arg)
-			di = (*di).addParameter(addPara)
+			di = (*di).addDbcallParameter(addPara)
 		}
 	}
 }
@@ -772,6 +898,30 @@ func (si *Analyzer) CheckDir(d string) {
 }
 
 func unittest(){
+	s0 := "ab???cdeft%sdagdsg%d23523?fdsaf?%s"
+	di_test := &DbInput{
+		format: &s0}
+	for i:= 0; ;i++{
+		if pos, c ,ok := (*di_test).getFormatOrQuestionMarkPos(i); ok{
+			fmt.Println("pos: ", pos, " c:",string(c))
+		}else{
+			break
+		}
+	}
+
+	fp1 := &functionPara{pName:"fp1fp1"}
+	fmt.Println("fp1 :", fp1)
+
+	fp2 := &functionPara{pName:"fp2fp2"}
+	fmt.Println("fp2 :", fp2)
+
+	fp3 := &functionPara{pName:"fp3fp3"}
+	fmt.Println("fp3 :", fp3)
+
+	fp3.conflate(fp2)
+	fp3.conflate(fp1)
+	fmt.Println("new fp3 :", fp3)
+
 	s1 := "xxx"
 	s2 := "yyyy"
 	s3 := "zzzz"
