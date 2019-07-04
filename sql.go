@@ -514,6 +514,15 @@ func getParaType(f ast.Field) string {
 		}
 		result = result + "." + t.Sel.Name
 	}
+	case *ast.ArrayType:{
+		switch Elt := t.Elt.(type){
+		case *ast.Ident:{
+			result = result + "[]" + Elt.Name
+		}
+	default:
+			panic(Elt)
+		}
+	}
 	default:
 		panic(t)
 	}
@@ -733,19 +742,26 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 		//fmt.Printf("push len is %d\n", si.caseStack.Len())
 		switch node:= n.(type){
 			case *ast.Field:
+				/*
 				if si.isFunctionParaName(){
 					if len(node.Names) > 0{
 						//fmt.Printf("%s %s\n", node.Names[0].Name, getParaType(*node))
 						si.parameters = append(si.parameters, 
 							functionPara{pName:node.Names[0].Name, pType:getParaType(*node)})
+						si.AddDbCallPara(node.Names[0].Name, getParaType(*node))
 					}
-					si.AddDbCallPara(node.Names[0].Name, getParaType(*node))
-				}
+				}*/
 			case *ast.FuncDecl:
 				if	si.state == StateMentAnalysis_START{
 					si.curFunName = node.Name.Name
 					si.ChangeState(StateMentAnalysis_FUNCTION)
 				}
+				for _, para := range node.Type.Params.List{
+					si.parameters = append(si.parameters, 
+						functionPara{pName:para.Names[0].Name, pType:getParaType(*para)})
+					si.AddDbCallPara(para.Names[0].Name, getParaType(*para))
+				}
+				fmt.Println(si.parameters)
 			case *ast.BlockStmt:{
 				if	si.state == StateMentAnalysis_FUNCTION{
 					si.ChangeState(StateMentAnalysis_FUNCTION_BODY)
@@ -978,7 +994,7 @@ func main(){
 	si  := &Analyzer{
 		logger:	log.New(os.Stderr, "[sqlinj]", log.LstdFlags),
 		caseStack:   list.New(),
-		parameters:       make([]functionPara,1),
+		//parameters:       make([]functionPara,1),
 		state:       StateMentAnalysis_START,
 		allPossibleInput: make(map[string]*DbInput),
 		dbCallPara:       make(map[string]string),
