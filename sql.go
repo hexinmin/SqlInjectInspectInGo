@@ -588,6 +588,9 @@ func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
 			case "Exec":{
 					si.analyzeDbCall(di, node, 0)
 				}
+			case "Get":{
+					si.analyzeDbCall(di, node, 1)
+				}
 			}
 		}
 	}	
