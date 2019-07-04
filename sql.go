@@ -704,7 +704,7 @@ func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
 	switch iType{
 	case "*sqlx.DB":{
 		switch fName{
-			case "Get":{
+			case "Get","Select":{
 					si.analyzeDbCall(di, node, 1)
 				}
 			}
