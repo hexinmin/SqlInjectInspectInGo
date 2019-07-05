@@ -217,14 +217,18 @@ func (di *DbInput) getFormatPos(index int) (int, rune, bool){
 	return 0, pre, false
 }
 
-// getFormatOrQuestionMarkPos both find %x and ?
+// getFormatOrQuestionMarkPos both find %x and ? and %%s%
 func (di *DbInput) getFormatOrQuestionMarkPos(index int) (int, rune, bool){
 	count := 0
 	var pre rune
 	found := false
 	for i, c := range *di.format{
 		if found{
-			return i - 1, c, true
+			if c == '%'{
+				found = false // like %%x%
+			}else{
+				return i - 1, c, true
+			}
 		}
 		if c == '?'{
 			if count == index{
@@ -329,6 +333,7 @@ func (di *DbInput) addDbcallParameter(input *DbInput) *DbInput{
 	}
 }
 
+// addParameterSingle for sprintf
 func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
 	if len(input.paras) > 0 || input.format != nil{
 		index := len(di.paras)
@@ -366,6 +371,7 @@ func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
 	return di
 }
 
+// addDbCallParameterSingle for dbcall
 func (di *DbInput) addDbCallParameterSingle(input *DbInput) *DbInput{
 	if len(input.paras) > 0 || input.format != nil{
 		index := len(di.paras)
@@ -415,7 +421,29 @@ func (di *DbInput) addDbCallParameterSingle(input *DbInput) *DbInput{
 	return di
 }
 
-func (di *DbInput) reportError(){
+func (di *DbInput) reportError(fun string, paras [] functionPara)string{
+	s := ""
+	if di.Empty(){
+		return s
+	}
+
+	for i := 0; ; i ++{
+		if _, c, ok := di.getFormatOrQuestionMarkPos(i); ok{
+			if c == 's' && i < len(di.paras){
+				for _, p := range(paras){
+					if di.paras[i] != nil && di.paras[i].pName == p.pName{
+						s = fun + " exist sql injection" 
+						return s
+					}
+				}
+			}
+			// check
+		}else{
+			break
+		}
+
+	}
+	return s
 }
 
 type ExtraceName struct {
@@ -469,7 +497,7 @@ func (en *ExtraceName) upDateStateAfterPop(){
 
 type Analyzer struct {
 	ignoreNosec bool
-	
+	catchError bool
 	caseStack   *list.List
 	parameters  [] functionPara
 	curParaName   string
@@ -479,6 +507,7 @@ type Analyzer struct {
 	logger      *log.Logger
 	dbCallPara   map[string]string
 	allPossibleInput map[string] *DbInput
+	result [] string
 }
 
 func (si *Analyzer) isFunctionParaName() bool {
@@ -787,11 +816,24 @@ func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
 		}
 	}	
 	
-	fmt.Println("final di is ")
+	//fmt.Println("final di is ")
 	fmt.Println(di.toString())
+	s := di.reportError(si.curFunName, si.parameters)
+	if s != ""{
+		fmt.Println(s)
+		si.result = append(si.result, s)
+	}
 }
 
 func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
+	defer func(){ 
+        //fmt.Println("catch error")
+        if err:=recover();err!=nil{
+			fmt.Println(err) 
+			si.catchError = true
+        }
+    }()
+
 	if n == nil{
 		si.upDateStateAfterPop()
 		//fmt.Printf("pop len is %d\n", si.caseStack.Len())
@@ -813,6 +855,8 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 			case *ast.FuncDecl:
 				if	si.state == StateMentAnalysis_START{
 					si.curFunName = node.Name.Name
+					si.catchError = false
+					fmt.Println("check " + si.curFunName)
 					si.ChangeState(StateMentAnalysis_FUNCTION)
 				}
 				for _, para := range node.Type.Params.List{
@@ -830,7 +874,9 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 			}
 			case *ast.CallExpr:{
 				//fmt.Printf("call expr %d\n", si.state )
-				if si.state == StateMentAnalysis_FUNCTION_BODY{
+				if si.state == StateMentAnalysis_FUNCTION_BODY && !si.catchError{
+
+					/*
 					if si.isSprintfCall(n){
 						//fmt.Printf("is sprintf call\n")
 						if len(node.Args) >= 2{
@@ -848,7 +894,7 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 								}
 							}
 						}
-					}
+					}*/
 					
 					if iType, fName, ok := si.isDbInterfaceCall(node); ok{
 						si.checkDbCall(node, iType, fName)
@@ -857,7 +903,7 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 				}
 			}
 			case *ast.AssignStmt:{
-				if si.state == StateMentAnalysis_FUNCTION_BODY{
+				if si.state == StateMentAnalysis_FUNCTION_BODY && !si.catchError{
 					// del right
 					
 					if node.Tok == token.ADD_ASSIGN{
@@ -869,7 +915,7 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 									dbInput.updateForAdd()
 									left = (left).concat(dbInput)
 									si.allPossibleInput[v.Name] = left
-									fmt.Println("allPossibleInput add += ", v.Name, ":", left)
+									//fmt.Println("allPossibleInput add += ", v.Name, ":", left)
 								}
 							}
 						}
@@ -878,7 +924,7 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 						if !dbInput.Empty(){
 							if v, ok := node.Lhs[0].(*ast.Ident); ok{
 								si.allPossibleInput[v.Name] = dbInput
-								fmt.Println("allPossibleInput add ", v.Name, ":", dbInput)
+								//fmt.Println("allPossibleInput add ", v.Name, ":", dbInput)
 							}
 						}
 					}
@@ -1070,6 +1116,7 @@ func main(){
 */
 	flag.Parse()
 	si  := &Analyzer{
+		catchError : false,
 		logger:	log.New(os.Stderr, "[sqlinj]", log.LstdFlags),
 		caseStack:   list.New(),
 		//parameters:       make([]functionPara,1),
@@ -1078,5 +1125,8 @@ func main(){
 		dbCallPara:       make(map[string]string),
 	}
 	si.CheckDir(*checkDir)
+	for _, err := range si.result{
+		fmt.Println("error: ", err)
+	}
 	//fmt.Println(getPackagePaths(*checkDir))
 }
