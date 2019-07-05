@@ -88,7 +88,8 @@ func (di *DbInput) toString() string {
 		s = "(nil)"
 	}else
 	{
-		s = *di.format
+		s = fmt.Sprintf("%d:", len(*di.format))
+		s += *di.format
 	}
 
 	s = s + " " + "["
@@ -203,7 +204,8 @@ func (di *DbInput) getFormatPos(index int) (int, rune, bool){
 		if found{
 			return i - 1, c, true
 		}
-		if i > 0 && c == '%' && pre != '\\' {
+		if (i > 0 && c == '%' && pre != '\\') ||
+			(i == 0 && c == '%') {
 			if count == index{
 				//return i, pre, true
 				found = true
@@ -353,7 +355,7 @@ func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
 			}
 		} else {
 			//if len(input.paras) > 1{
-				panic(*di)
+				panic("di:" + di.String() + "input:" + input.String())
 			//}
 			//di.paras = append(di.paras, input.paras[0])
 		}
@@ -403,7 +405,7 @@ func (di *DbInput) addDbCallParameterSingle(input *DbInput) *DbInput{
 			}
 		} else {
 			//if len(input.paras) > 1{
-				panic(3)
+				panic("di:" + di.String() + "input:" + input.String())
 			//}
 			//di.paras = append(di.paras, input.paras[0])
 		}
@@ -784,7 +786,9 @@ func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
 			}
 		}
 	}	
-	fmt.Println("final di is ", di)
+	
+	fmt.Println("final di is ")
+	fmt.Println(di.toString())
 }
 
 func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
@@ -855,13 +859,30 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 			case *ast.AssignStmt:{
 				if si.state == StateMentAnalysis_FUNCTION_BODY{
 					// del right
-					dbInput := si.getDbInputFromRhs(node.Rhs[0])
-					if !dbInput.Empty(){
-						if v, ok := node.Lhs[0].(*ast.Ident); ok{
-							si.allPossibleInput[v.Name] = dbInput
-							fmt.Println("allPossibleInput add ", dbInput)
+					
+					if node.Tok == token.ADD_ASSIGN{
+						dbInput := si.getDbInputFromRhs(node.Rhs[0])
+						if !dbInput.Empty(){
+							if v, ok := node.Lhs[0].(*ast.Ident); ok{
+								left := si.getDbInputFromRhs(node.Lhs[0])
+								if !left.Empty(){
+									dbInput.updateForAdd()
+									left = (left).concat(dbInput)
+									si.allPossibleInput[v.Name] = left
+									fmt.Println("allPossibleInput add += ", v.Name, ":", left)
+								}
+							}
+						}
+					} else {
+						dbInput := si.getDbInputFromRhs(node.Rhs[0])
+						if !dbInput.Empty(){
+							if v, ok := node.Lhs[0].(*ast.Ident); ok{
+								si.allPossibleInput[v.Name] = dbInput
+								fmt.Println("allPossibleInput add ", v.Name, ":", dbInput)
+							}
 						}
 					}
+
 				}
 			}
 		}
