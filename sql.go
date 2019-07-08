@@ -77,26 +77,57 @@ const (
 )
 
 type DbInput struct{
-	format * string
+	format  string
 	paras [] *functionPara
 	next * DbInput
+	follow * DbInput 
+	prepare * DbInput
+}
+
+func (di *DbInput) clone() *DbInput {
+	return &DbInput{
+		format: di.format,
+		paras : di.paras,
+		next : nil,
+		follow : nil,
+		prepare : nil,
+	}
+}
+
+func (di *DbInput) deepclone() *DbInput {
+	r := di.clone()
+	rloop := r
+	dfollow := di.follow
+	for ; dfollow != nil; dfollow = dfollow.follow{
+		rloop.follow = dfollow.clone()
+		rloop = rloop.follow	
+	}
+	return r
+}
+
+func (di *DbInput) toStringSingle() string {
+	s := ""
+	if di.format == ""{
+		s = "(blank)"
+	}else
+	{
+		s = fmt.Sprintf("%d:", len(di.format))
+		s += di.format
+	}
+
+	s = s + "" + "["
+	for _, p := range di.paras{
+		s = s + (*p).String() + ","
+	}
+	s = s + "]" + fmt.Sprintf("%p", di)
+    return s
 }
 
 func (di *DbInput) toString() string {
-	s := ""
-	if di.format == nil{
-		s = "(nil)"
-	}else
-	{
-		s = fmt.Sprintf("%d:", len(*di.format))
-		s += *di.format
+	s := di.toStringSingle()
+	for f := di.follow; f != nil; f = f.follow{
+		s = s + "-->" + f.toStringSingle()
 	}
-
-	s = s + " " + "["
-	for _, p := range di.paras{
-		s = s + " " + (*p).String()
-	}
-	s = s + "]"
     return s
 }
 
@@ -108,7 +139,7 @@ func (di *DbInput) String() string {
 			break
 		}
 		dump = (*dump).next
-		s = s + " --> " + (*dump).toString()
+		s = s + "==>" + (*dump).toString()
 	}
 	return s
 }
@@ -117,14 +148,14 @@ func (di *DbInput) updateForAdd(){
 	if di.Empty(){
 		panic(1)
 	}
-	if len(di.paras) > 0 && ((*di).format == nil){
+	if len(di.paras) > 0 && ((*di).format == ""){
 		s := "%s"
-		di.format = &s
+		di.format = s
 	}
 }
 
 func (di *DbInput) Empty() bool {
-	return di.format == nil && len(di.paras) == 0 && di.next == nil
+	return di.format == "" && len(di.paras) == 0 && di.next == nil
 }
 
 func (di *DbInput) appendTail(v *DbInput) *DbInput {
@@ -177,7 +208,7 @@ func (di *DbInput) filterEmptyPara(){
 func (di *DbInput) getParaCountFromFormat() int {
 	count := 0
 	var pre rune
-	for i, c := range *di.format{
+	for i, c := range di.format{
 		if i > 0 && c == '%' && pre != '\\' {
 			count = count + 1
 		}
@@ -195,54 +226,71 @@ func (di *DbInput) getFirstEmpty(start int) (int, bool){
 	return 0, false
 }
 
+
+
+type FomatState int 
+const (
+	_ FomatState = iota
+	FomatState_START
+	FomatState_PERCENT
+)
+
 // getFormatPos index from 0, only for %x
 func (di *DbInput) getFormatPos(index int) (int, rune, bool){
-	count := 0
 	var pre rune
-	found := false
-	for i, c := range *di.format{
-		if found{
-			return i - 1, c, true
-		}
-		if (i > 0 && c == '%' && pre != '\\') ||
-			(i == 0 && c == '%') {
-			if count == index{
-				//return i, pre, true
-				found = true
+	count := 0
+	state := FomatState_START
+	for i, c := range di.format{
+		if c == '%'{
+			if state == FomatState_START{
+				state = FomatState_PERCENT
+			}else{
+				state = FomatState_START // %%
 			}
-			count = count + 1
+		}else if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'){
+			if state == FomatState_PERCENT{
+				if count == index{
+					return i, c, true
+				}else{
+					count++
+					state = FomatState_START 
+				}
+			}
+		}else{
+			state = FomatState_START
 		}
-		pre = c
 	}
 	return 0, pre, false
 }
 
 // getFormatOrQuestionMarkPos both find %x and ? and %%s%
 func (di *DbInput) getFormatOrQuestionMarkPos(index int) (int, rune, bool){
-	count := 0
 	var pre rune
-	found := false
-	for i, c := range *di.format{
-		if found{
-			if c == '%'{
-				found = false // like %%x%
-			}else{
-				return i - 1, c, true
-			}
-		}
+	count := 0
+	state := FomatState_START
+	for i, c := range di.format{
 		if c == '?'{
 			if count == index{
 				return i, c, true
+			}else{
+				count ++
+				state = FomatState_START
 			}
-			count = count + 1
-		} else if i > 0 && c == '%' && pre != '\\' {
-			if count == index{
-				//return i, pre, true
-				found = true
+		}else if c == '%'{
+			state = FomatState_PERCENT
+		}else if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'){
+			if state == FomatState_PERCENT{
+				if count == index{
+					return i, c, true
+				}else{
+					count ++
+					state = FomatState_START
+				}
 			}
-			count = count + 1
+		}else
+		{
+			state = FomatState_START
 		}
-		pre = c
 	}
 	return 0, pre, false
 }
@@ -263,20 +311,23 @@ func (di *DbInput) appendParas(paras [] *functionPara) {
 	}
 }
 
-func (di *DbInput) concat(input *DbInput)*DbInput{
-	// merge format
-	s := (*di).format
-	if (*di).format != nil{
-		s = &(*(*di).format)
-	}
-	if (*input).format != nil{
-		if s == nil{
-			s = &(*(*input).format)
-		}else{
-			*s = *s + *(*input).format
+func (di *DbInput) last()*DbInput{
+	for; ; di = di.follow{
+		if di.follow == nil{
+			return di
 		}
 	}
-	(*di).format = s
+}
+
+func (di *DbInput) add(input *DbInput)*DbInput{
+	r1 := di.deepclone()
+	r2 := input.deepclone()
+	r1.last().follow = r2
+	return r1
+}
+
+func (di *DbInput) concat(input *DbInput)*DbInput{
+	(*di).format += input.format
 	di.paras = append(di.paras, input.paras...) 
 	// merge paras
 	return di
@@ -299,6 +350,42 @@ func (di *DbInput) addFormat(input *DbInput) *DbInput{
 	di.format = input.format
 	di.paras = append(input.paras, di.paras...)
 	return di
+}
+
+func (di *DbInput) mergePureFormat() *DbInput {
+	r := di.deepclone()
+	for l := r; l.follow != nil;{
+		follow := l.follow.follow
+		if len(l.follow.paras) == 0{
+			l.format = l.format + l.follow.format
+			l.follow = follow
+		}else{
+			l = l.follow
+		}
+	}
+	return r
+}
+
+func (di *DbInput) split()*DbInput {
+	if len(di.paras) > 0{
+		panic(1)
+	}
+	r := di.clone()
+	l := r
+	for{
+		if i, _, ok := l.getFormatPos(0); ok{
+			f := l.clone()
+			rf := l.format[:i + 1]
+			ff := l.format[i:]
+			r.format = rf
+			f.format = ff
+			r.follow = f
+			l = f
+		}else{
+			break
+		}
+	}
+	return r
 }
 
 func (di *DbInput) addParameter(input *DbInput) *DbInput{
@@ -335,14 +422,14 @@ func (di *DbInput) addDbcallParameter(input *DbInput) *DbInput{
 
 // addParameterSingle for sprintf
 func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
-	if len(input.paras) > 0 || input.format != nil{
+	if len(input.paras) > 0 || input.format != ""{
 		index := len(di.paras)
 		//fmt.Println("format ", *di.format, " ", index)
 		if pos, preChar, ok := di.getFormatPos(index); ok{
 			//fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
 			if preChar == 's'{
 				// merge format
-				if input.format == nil{
+				if input.format == ""{
 					// only parameter
 					if len(input.paras) > 1{
 						panic(*di)
@@ -350,8 +437,8 @@ func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
 					di.paras = append(di.paras, input.paras[0])
 				} else {
 					// merge format
-					s := (*di.format)[:pos] + *input.format + (*di.format)[pos + 2:]
-					di.format = &s
+					s := (di.format)[:pos] + input.format + (di.format)[pos + 2:]
+					di.format = s
 					di.paras = append(di.paras, input.paras...)
 				}
 			} else {
@@ -373,14 +460,14 @@ func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
 
 // addDbCallParameterSingle for dbcall
 func (di *DbInput) addDbCallParameterSingle(input *DbInput) *DbInput{
-	if len(input.paras) > 0 || input.format != nil{
+	if len(input.paras) > 0 || input.format != ""{
 		index := len(di.paras)
 		//fmt.Println("format ", *di.format, " ", index)
 		if pos, preChar, ok := di.getFormatOrQuestionMarkPos(index); ok{
 			//fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
 			if preChar == 's'{
 				// merge format
-				if input.format == nil{
+				if input.format == ""{
 					// only parameter
 					if len(input.paras) > 1{
 						panic(3)
@@ -388,8 +475,8 @@ func (di *DbInput) addDbCallParameterSingle(input *DbInput) *DbInput{
 					di.paras = append(di.paras, input.paras[0])
 				} else {
 					// merge format
-					s := (*di.format)[:pos] + *input.format + (*di.format)[pos + 2:]
-					di.format = &s
+					s := (di.format)[:pos] + input.format + (di.format)[pos + 2:]
+					di.format = s
 					di.paras = append(di.paras, input.paras...)
 				}
 			}else if preChar == '?'{
@@ -718,7 +805,7 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 		s := v.Value
 		s = s[1:len(s)-1]
 		return &DbInput{
-			format: &s,
+			format: s,
 		}
 	}else if v, ok := n.(*ast.Ident); ok{ // *ast.Ident
 		if k, ok := si.allPossibleInput[v.Name]; ok{
@@ -1037,12 +1124,60 @@ func (si *Analyzer) CheckDir(d string) {
 	si.Process(buildTags, paths)
 }
 
+func unittest1(){
+	fmt.Println("-------------------")
+	s1 := "s1"
+	s2 := "s2"
+	
+	di1 := &DbInput{
+		format: s1,
+		paras: [] *functionPara {&functionPara{pName:"p1",},},
+	}
+
+	fmt.Println("di1 :", di1)
+
+	di2 := &DbInput{
+		format: s2,
+		//paras: [] *functionPara {&functionPara{pName:"p2",},},
+	}
+
+	fmt.Println("di2 :", di2)
+	di3 := di1.add(di2)
+	di4 := di3.add(di1)
+	fmt.Println("di1 + di2 :", di1.add(di2))
+	fmt.Println("di3 :", di3)
+	fmt.Println("di4 :", di4)
+
+	di5 := di4.deepclone()
+	di4 = di4.add(di1)
+	fmt.Println("di5 :", di5)
+	fmt.Println("di4 :", di4)
+	
+	di5 = di5.add(di1)
+	di5 = di5.add(di2)
+	di5 = di5.add(di1)
+	di6 := di5.mergePureFormat()
+	fmt.Println("di5 add :", di5)
+	fmt.Println("di6 add :", di6)
+}
+
 func unittest(){
-	s0 := "ab???cdeft%sdagdsg%d23523?fdsaf?%s"
+	s0 := "ab???cdeft%%s%dagdsg%%d%23523?f%dsaf?%s"
 	di_test := &DbInput{
-		format: &s0}
+		format: s0}
+	fmt.Println(s0)
 	for i:= 0; ;i++{
 		if pos, c ,ok := (*di_test).getFormatOrQuestionMarkPos(i); ok{
+			fmt.Println("pos: ", pos, " c:",string(c))
+		}else{
+			break
+		}
+	}
+
+	fmt.Println("----------------------")
+
+	for i:= 0; ;i++{
+		if pos, c ,ok := (*di_test).getFormatPos(i); ok{
 			fmt.Println("pos: ", pos, " c:",string(c))
 		}else{
 			break
@@ -1066,14 +1201,14 @@ func unittest(){
 	s2 := "yyyy"
 	s3 := "zzzz"
 	di1 := &DbInput{
-		format: &s1,
+		format: s1,
 		paras: [] *functionPara {&functionPara{pName:"xxxx",},},
 	}
 
 	fmt.Println("di1 :", di1)
 
 	di2 := &DbInput{
-		format: nil,
+		format: "",
 		paras: [] *functionPara {&functionPara{pName:"xxxx",},},
 	}
 
@@ -1090,30 +1225,33 @@ func unittest(){
 	(*di5).next = di5
 
 	di5 = di5.appendTail(&DbInput{
-		format: &s1,
+		format: s1,
 		paras: [] *functionPara {&functionPara{pName:"xxxx",},},
 	})
 	di5 = di5.appendTail(&DbInput{
-		format: &s2,
+		format: s2,
 		paras: [] *functionPara {&functionPara{pName:"yyyy",},},
 	})
 	fmt.Println("di5 :", di5)
 
 	di6 := di5.likeStringJoin(&DbInput{
-		format: &s3,
+		format: s3,
 		paras: [] *functionPara {&functionPara{pName:"zzz",},},
 	})
 	fmt.Println("di6 :", di6)
 
 	di7 := di6.merge()
 	fmt.Println("di7 :", di7)
+
+	unittest1()
 }
 
 func main(){
-	/*
+	
+	fmt.Printf("%%%s\n","xxxx")
 	unittest()
 	return
-*/
+
 	flag.Parse()
 	si  := &Analyzer{
 		catchError : false,
