@@ -82,6 +82,7 @@ type DbInput struct{
 	next * DbInput
 	follow * DbInput 
 	prepare * DbInput
+	c rune
 }
 
 func (di *DbInput) clone() *DbInput {
@@ -119,7 +120,7 @@ func (di *DbInput) toStringSingle() string {
 	for _, p := range di.paras{
 		s = s + (*p).String() + ","
 	}
-	s = s + "]" + fmt.Sprintf("%p", di)
+	s = s + "]" //+ fmt.Sprintf("%p", di)
     return s
 }
 
@@ -216,17 +217,6 @@ func (di *DbInput) getParaCountFromFormat() int {
 	}
 	return count
 }
-
-func (di *DbInput) getFirstEmpty(start int) (int, bool){
-	for i , p := range di.paras{
-		if i >= start && p == nil{
-			return i, true
-		}
-	}
-	return 0, false
-}
-
-
 
 type FomatState int 
 const (
@@ -347,16 +337,18 @@ func (di *DbInput) merge() *DbInput{
 }
 
 func (di *DbInput) addFormat(input *DbInput) *DbInput{
-	di.format = input.format
-	di.paras = append(input.paras, di.paras...)
-	return di
+	return di.mergePureFormat().deepSplit()
+}
+
+func (di *DbInput) addFormatDb(input *DbInput) *DbInput{
+	return di.mergePureFormat().deepSplitDB()
 }
 
 func (di *DbInput) mergePureFormat() *DbInput {
 	r := di.deepclone()
 	for l := r; l.follow != nil;{
 		follow := l.follow.follow
-		if len(l.follow.paras) == 0{
+		if len(l.paras) == 0 && len(l.follow.paras) == 0{
 			l.format = l.format + l.follow.format
 			l.follow = follow
 		}else{
@@ -366,26 +358,82 @@ func (di *DbInput) mergePureFormat() *DbInput {
 	return r
 }
 
-func (di *DbInput) split()*DbInput {
-	if len(di.paras) > 0{
-		panic(1)
+func (di *DbInput) deepSplit()*DbInput {
+	r := di.split()
+	l := di
+	for l.follow != nil{
+		r.last().follow = l.follow.split()
+		l = l.follow
 	}
+	return r
+}
+
+func (di *DbInput) split()*DbInput {
 	r := di.clone()
-	l := r
+	if len(r.paras) > 0{
+		return r
+	}
+	l := r 
 	for{
-		if i, _, ok := l.getFormatPos(0); ok{
+		if i, c, ok := l.getFormatPos(0); ok{
 			f := l.clone()
-			rf := l.format[:i + 1]
-			ff := l.format[i:]
-			r.format = rf
+			lf := l.format[:i + 1]
+			ff := l.format[i + 1:]
+			l.format = lf
+			l.c = c
 			f.format = ff
-			r.follow = f
+			l.follow = f
 			l = f
 		}else{
 			break
 		}
 	}
 	return r
+}
+
+func (di *DbInput) deepSplitDB()*DbInput {
+	r := di.split()
+	l := di
+	for l.follow != nil{
+		r.last().follow = l.follow.splitDB()
+		l = l.follow
+	}
+	return r
+}
+
+func (di *DbInput) splitDB()*DbInput {
+	r := di.clone()
+	if len(r.paras) > 0{
+		return r
+	}
+	l := r 
+	for{
+		if i, c, ok := l.getFormatOrQuestionMarkPos(0); ok{
+			f := l.clone()
+			lf := l.format[:i + 1]
+			ff := l.format[i + 1:]
+			l.format = lf
+			l.c = c
+			f.format = ff
+			l.follow = f
+			l = f
+		}else{
+			break
+		}
+	}
+	return r
+}
+
+func (di *DbInput) getFirstEmpty()*DbInput {
+	l := di
+	for l!= nil{
+		if len(l.paras) == 0 && l.prepare == nil{
+			return l
+		}else{
+			l = l.follow
+		}
+	}
+	return nil
 }
 
 func (di *DbInput) addParameter(input *DbInput) *DbInput{
@@ -404,108 +452,37 @@ func (di *DbInput) addParameter(input *DbInput) *DbInput{
 	}
 }
 
-func (di *DbInput) addDbcallParameter(input *DbInput) *DbInput{
-	if (*input).next == nil{
-		return di.addDbCallParameterSingle(input)
-	}else{
-		n := (*input).next
-		for{
-			if n == input{
-				break
-			}
-			di = di.addDbCallParameterSingle(n)
-			n = (*n).next
-		}
-		return di
-	}
-}
-
 // addParameterSingle for sprintf
 func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
-	if len(input.paras) > 0 || input.format != ""{
-		index := len(di.paras)
-		//fmt.Println("format ", *di.format, " ", index)
-		if pos, preChar, ok := di.getFormatPos(index); ok{
-			//fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
-			if preChar == 's'{
-				// merge format
-				if input.format == ""{
-					// only parameter
-					if len(input.paras) > 1{
-						panic(*di)
-					}
-					di.paras = append(di.paras, input.paras[0])
-				} else {
-					// merge format
-					s := (di.format)[:pos] + input.format + (di.format)[pos + 2:]
-					di.format = s
-					di.paras = append(di.paras, input.paras...)
-				}
-			} else {
-				// format not change
-				di.paras = append(di.paras, &functionPara{})
-			}
-		} else {
-			//if len(input.paras) > 1{
-				panic("di:" + di.String() + "input:" + input.String())
-			//}
-			//di.paras = append(di.paras, input.paras[0])
-		}
-	}else{
-		//panic(1)
+	prepare := di.getFirstEmpty()
+	if prepare == nil{
+		panic(1)
 	}
-
+	prepare.prepare = input.deepclone()
 	return di
 }
 
-// addDbCallParameterSingle for dbcall
-func (di *DbInput) addDbCallParameterSingle(input *DbInput) *DbInput{
-	if len(input.paras) > 0 || input.format != ""{
-		index := len(di.paras)
-		//fmt.Println("format ", *di.format, " ", index)
-		if pos, preChar, ok := di.getFormatOrQuestionMarkPos(index); ok{
-			//fmt.Println("hexinmin add with format 2 ", index, " ",pos, " ", preChar)
-			if preChar == 's'{
-				// merge format
-				if input.format == ""{
-					// only parameter
-					if len(input.paras) > 1{
-						panic(3)
-					}
-					di.paras = append(di.paras, input.paras[0])
-				} else {
-					// merge format
-					s := (di.format)[:pos] + input.format + (di.format)[pos + 2:]
-					di.format = s
-					di.paras = append(di.paras, input.paras...)
-				}
-			}else if preChar == '?'{
-				// neglect input format, can not unfold
-				p := &functionPara{}
-				if len(input.paras) > 0{
-					p = input.paras[0]
-					for i, ip := range input.paras{
-						if i > 0{
-							p.conflate(ip)
-						}
-					}
-				}
-				//fmt.Println("append parameter :", *p, " ", (*input).String())
-				di.paras = append(di.paras, p)
-			}else{
-				// format not change
-				di.paras = append(di.paras, &functionPara{})
-			}
-		} else {
-			//if len(input.paras) > 1{
-				panic("di:" + di.String() + "input:" + input.String())
-			//}
-			//di.paras = append(di.paras, input.paras[0])
+func (di *DbInput) commit(){
+	if di.prepare != nil{
+		if di.c == 's'{
+			// replace
+			di.prepare.last().follow = di.follow
+			f := di.prepare.follow
+			*di = *(di.prepare)
+			di.follow = f
+		}else{
+			di.prepare = nil
+			di.paras = [] *functionPara {}
 		}
-	}else{
-		//panic(1)
 	}
-	return di
+}
+
+func (di *DbInput) deepCommit(){
+	l := di
+	f := l.follow
+	for ; l != nil ; l = f{
+		l.commit()
+	}
 }
 
 func (di *DbInput) reportError(fun string, paras [] functionPara)string{
@@ -774,6 +751,7 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 							di = di.addParameter(addParameter)
 						}
 					}
+					di.deepCommit()
 				} else if x.Name == "strings" && f.Sel.Name == "Join"{
 					di = si.getDbInputFromRhs(callexp.Args[0])
 					join := si.getDbInputFromRhs(callexp.Args[1])
@@ -797,9 +775,7 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 		if v.Op == token.ADD{
 			X := si.getDbInputFromRhs(v.X)
 			Y := si.getDbInputFromRhs(v.Y)
-			(*X).updateForAdd()
-			(*Y).updateForAdd()
-			di = (*X).concat(Y)
+			di = X.add(Y)
 		}
 	}else if v, ok := n.(*ast.BasicLit); ok { // plain text
 		s := v.Value
@@ -812,6 +788,7 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 			return k
 		} else {
 			return &DbInput{
+				format : "%s",
 				paras: [] *functionPara {&functionPara{pName:v.Name,},},
 			}
 		}
@@ -873,10 +850,10 @@ func (si *Analyzer) analyzeDbCall(di *DbInput, ce *ast.CallExpr, index int){
 	for i, arg := range ce.Args{
 		if i == index{
 			addFormat := si.getDbInputFromRhs(arg)
-			di = (*di).addFormat(addFormat)
+			di = (*di).addFormatDb(addFormat)
 		} else if i > index {
 			addPara := si.getDbInputFromRhs(arg)
-			di = (*di).addDbcallParameter(addPara)
+			di = (*di).addParameter(addPara)
 		}
 	}
 }
@@ -903,13 +880,14 @@ func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
 		}
 	}	
 	
-	//fmt.Println("final di is ")
+	fmt.Println("final di is ")
 	fmt.Println(di.toString())
+	/*
 	s := di.reportError(si.curFunName, si.parameters)
 	if s != ""{
 		fmt.Println(s)
 		si.result = append(si.result, s)
-	}
+	}*/
 }
 
 func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
@@ -999,19 +977,18 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 							if v, ok := node.Lhs[0].(*ast.Ident); ok{
 								left := si.getDbInputFromRhs(node.Lhs[0])
 								if !left.Empty(){
-									dbInput.updateForAdd()
-									left = (left).concat(dbInput)
-									si.allPossibleInput[v.Name] = left
+									si.allPossibleInput[v.Name] = left.add(dbInput)
 									//fmt.Println("allPossibleInput add += ", v.Name, ":", left)
 								}
 							}
 						}
 					} else {
 						dbInput := si.getDbInputFromRhs(node.Rhs[0])
+						fmt.Println("new input:", dbInput)
 						if !dbInput.Empty(){
 							if v, ok := node.Lhs[0].(*ast.Ident); ok{
 								si.allPossibleInput[v.Name] = dbInput
-								//fmt.Println("allPossibleInput add ", v.Name, ":", dbInput)
+								fmt.Println("allPossibleInput add ", v.Name, ":", dbInput)
 							}
 						}
 					}
@@ -1126,19 +1103,22 @@ func (si *Analyzer) CheckDir(d string) {
 
 func unittest1(){
 	fmt.Println("-------------------")
-	s1 := "s1"
-	s2 := "s2"
+	s1 := "SELECT %s FROM %s b_sum"
+	s2 := "%s"
 	
 	di1 := &DbInput{
 		format: s1,
-		paras: [] *functionPara {&functionPara{pName:"p1",},},
+		//paras: [] *functionPara {&functionPara{pName:"p1",},},
 	}
 
 	fmt.Println("di1 :", di1)
+	di1 = di1.split()
+	fmt.Println("di1 :", di1)
+	fmt.Println("di1 merge :", di1.mergePureFormat())
 
 	di2 := &DbInput{
 		format: s2,
-		//paras: [] *functionPara {&functionPara{pName:"p2",},},
+		paras: [] *functionPara {&functionPara{pName:"p2",},},
 	}
 
 	fmt.Println("di2 :", di2)
@@ -1157,8 +1137,14 @@ func unittest1(){
 	di5 = di5.add(di2)
 	di5 = di5.add(di1)
 	di6 := di5.mergePureFormat()
-	fmt.Println("di5 add :", di5)
-	fmt.Println("di6 add :", di6)
+	fmt.Println("di5 :", di5)
+	fmt.Println("di6 :", di6)
+	di7 := di6.deepSplit()
+	fmt.Println("di7 :", di7)
+	di8 := di7.mergePureFormat()
+	fmt.Println("di8 :", di8)
+	di9 := di8.deepSplit()
+	fmt.Println("di9 :", di9)
 }
 
 func unittest(){
@@ -1247,11 +1233,11 @@ func unittest(){
 }
 
 func main(){
-	
+	/*
 	fmt.Printf("%%%s\n","xxxx")
 	unittest()
 	return
-
+*/
 	flag.Parse()
 	si  := &Analyzer{
 		catchError : false,
