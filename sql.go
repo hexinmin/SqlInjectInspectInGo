@@ -82,17 +82,16 @@ type DbInput struct{
 	next * DbInput
 	follow * DbInput 
 	prepare * DbInput
-	c rune
 }
 
 func (di *DbInput) clone() *DbInput {
-	return &DbInput{
-		format: di.format,
-		paras : di.paras,
-		next : nil,
-		follow : nil,
-		prepare : nil,
-	}
+	r := &DbInput{}
+	*r = *di
+	r.next = nil
+	r.follow = nil
+	r.prepare = nil
+	
+	return r
 }
 
 func (di *DbInput) deepclone() *DbInput {
@@ -115,7 +114,7 @@ func (di *DbInput) toStringSingle() string {
 		s = fmt.Sprintf("%d:", len(di.format))
 		s += di.format
 	}
-
+	
 	s = s + "" + "["
 	for _, p := range di.paras{
 		s = s + (*p).String() + ","
@@ -337,11 +336,11 @@ func (di *DbInput) merge() *DbInput{
 }
 
 func (di *DbInput) addFormat(input *DbInput) *DbInput{
-	return di.mergePureFormat().deepSplit()
+	return input.mergePureFormat().deepSplit()
 }
 
 func (di *DbInput) addFormatDb(input *DbInput) *DbInput{
-	return di.mergePureFormat().deepSplitDB()
+	return input.mergePureFormat().deepSplitDB()
 }
 
 func (di *DbInput) mergePureFormat() *DbInput {
@@ -375,12 +374,14 @@ func (di *DbInput) split()*DbInput {
 	}
 	l := r 
 	for{
-		if i, c, ok := l.getFormatPos(0); ok{
+		if i, _, ok := l.getFormatPos(0); ok{
 			f := l.clone()
 			lf := l.format[:i + 1]
+			if lf == l.format{
+				break
+			}
 			ff := l.format[i + 1:]
 			l.format = lf
-			l.c = c
 			f.format = ff
 			l.follow = f
 			l = f
@@ -408,12 +409,14 @@ func (di *DbInput) splitDB()*DbInput {
 	}
 	l := r 
 	for{
-		if i, c, ok := l.getFormatOrQuestionMarkPos(0); ok{
+		if i, _, ok := l.getFormatOrQuestionMarkPos(0); ok{
 			f := l.clone()
 			lf := l.format[:i + 1]
+			if lf == l.format{
+				break
+			}
 			ff := l.format[i + 1:]
 			l.format = lf
-			l.c = c
 			f.format = ff
 			l.follow = f
 			l = f
@@ -464,12 +467,33 @@ func (di *DbInput) addParameterSingle(input *DbInput) *DbInput{
 
 func (di *DbInput) commit(){
 	if di.prepare != nil{
-		if di.c == 's'{
+		_, c, _ := di.getFormatPos(0)
+		if c == 's'{
 			// replace
 			di.prepare.last().follow = di.follow
 			f := di.prepare.follow
+			format := di.format[:len(di.format) - 2] + di.prepare.format
 			*di = *(di.prepare)
 			di.follow = f
+			di.format = format
+		}else{
+			di.prepare = nil
+			di.paras = [] *functionPara {}
+		}
+	}
+}
+
+func (di *DbInput) commitDB(){
+	if di.prepare != nil{
+		_, c, _ := di.getFormatOrQuestionMarkPos(0)
+		if c == 's'{
+			// replace
+			di.prepare.last().follow = di.follow
+			f := di.prepare.follow
+			format := di.format[:len(di.format) - 2] + di.prepare.format
+			*di = *(di.prepare)
+			di.follow = f
+			di.format = format
 		}else{
 			di.prepare = nil
 			di.paras = [] *functionPara {}
@@ -482,6 +506,16 @@ func (di *DbInput) deepCommit(){
 	f := l.follow
 	for ; l != nil ; l = f{
 		l.commit()
+		f = l.follow
+	}
+}
+
+func (di *DbInput) deepCommitDB(){
+	l := di
+	f := l.follow
+	for ; l != nil ; l = f{
+		l.commitDB()
+		f = l.follow
 	}
 }
 
@@ -732,6 +766,17 @@ func (si *Analyzer) isDbCallFunction() bool{
 	return false
 }
 
+func (si *Analyzer) getDbInputFromToken(token string) *DbInput {
+	if k, ok := si.allPossibleInput[token]; ok{
+		return k
+	} else {
+		return &DbInput{
+			format : "%s",
+			paras: [] *functionPara {&functionPara{pName:token,},},
+		}
+	}
+}
+
 func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 	di := &DbInput{}
 	// fmt.printf
@@ -815,7 +860,8 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 		en := NewExtraceName()
 		ast.Walk(en, n)
 		if en.result != ""{
-			di.paras = append(di.paras, &functionPara{pName:en.result,})
+			//di.paras = append(di.paras, &functionPara{pName:en.result,})
+			di = si.getDbInputFromToken(en.result)
 		}
 	}
 	// []interface{}{}
@@ -826,7 +872,7 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 
 func (si *Analyzer) AddDbCallPara(n string, t string){
 	switch t{
-	case "*sqlx.DB", "*sqlx.Tx":
+	case "*sqlx.DB", "*sqlx.Tx", "sql.DbInterface":
 		{
 			if _, ok := si.dbCallPara[n]; !ok{
 				si.dbCallPara[n] = t
@@ -846,7 +892,7 @@ func (si *Analyzer) isDbInterfaceCall(n *ast.CallExpr) (string, string, bool) {
 	return "", "", false
 }
 
-func (si *Analyzer) analyzeDbCall(di *DbInput, ce *ast.CallExpr, index int){
+func (si *Analyzer) analyzeDbCall(di *DbInput, ce *ast.CallExpr, index int) *DbInput{
 	for i, arg := range ce.Args{
 		if i == index{
 			addFormat := si.getDbInputFromRhs(arg)
@@ -856,6 +902,8 @@ func (si *Analyzer) analyzeDbCall(di *DbInput, ce *ast.CallExpr, index int){
 			di = (*di).addParameter(addPara)
 		}
 	}
+	di.deepCommitDB()
+	return di
 }
 
 func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
@@ -864,19 +912,28 @@ func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
 	case "*sqlx.DB":{
 		switch fName{
 			case "Get","Select":{
-					si.analyzeDbCall(di, node, 1)
+					di = si.analyzeDbCall(di, node, 1)
 				}
+			case "Queryx":{
+				di = si.analyzeDbCall(di, node, 0)
+			}
 			}
 		}
 	case "*sqlx.Tx":{
 		switch fName{
 			case "Exec":{
-					si.analyzeDbCall(di, node, 0)
+					di = si.analyzeDbCall(di, node, 0)
 				}
 			case "Get":{
-					si.analyzeDbCall(di, node, 1)
+					di = si.analyzeDbCall(di, node, 1)
 				}
 			}
+		}
+	case "sql.DbInterface":
+		switch fName{
+		case "Get":{
+			di = si.analyzeDbCall(di, node, 1)
+		}
 		}
 	}	
 	
@@ -984,11 +1041,11 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 						}
 					} else {
 						dbInput := si.getDbInputFromRhs(node.Rhs[0])
-						fmt.Println("new input:", dbInput)
+						//fmt.Println("new input:", dbInput)
 						if !dbInput.Empty(){
 							if v, ok := node.Lhs[0].(*ast.Ident); ok{
 								si.allPossibleInput[v.Name] = dbInput
-								fmt.Println("allPossibleInput add ", v.Name, ":", dbInput)
+								//fmt.Println("allPossibleInput add ", v.Name, ":", dbInput)
 							}
 						}
 					}
