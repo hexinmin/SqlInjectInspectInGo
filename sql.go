@@ -158,6 +158,10 @@ func (di *DbInput) Empty() bool {
 	return di.format == "" && len(di.paras) == 0 && di.next == nil
 }
 
+func (di *DbInput) isCollection() bool {
+	return di.next != nil
+}
+
 func (di *DbInput) appendTail(v *DbInput) *DbInput {
 	// get tail
 	if (*di).next == nil{
@@ -722,6 +726,7 @@ func (si *Analyzer) upDateStateAfterPop(){
 				si.parameters = nil
 				si.curFunName = ""
 				si.allPossibleInput = make(map[string] *DbInput)
+				si.dbCallPara = make(map[string]string)
 				si.ChangeState(StateMentAnalysis_START)
 			}
 		}
@@ -799,6 +804,10 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 					di.deepCommit()
 				} else if x.Name == "strings" && f.Sel.Name == "Join"{
 					di = si.getDbInputFromRhs(callexp.Args[0])
+					if !di.isCollection(){ // todo delete
+						di = &DbInput{}
+						(*di).next = di
+					}
 					join := si.getDbInputFromRhs(callexp.Args[1])
 					(*di).likeStringJoin(join)
 					di = di.merge()
@@ -809,6 +818,10 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 				for i, arg := range callexp.Args{
 					if i == 0{
 						di = si.getDbInputFromRhs(arg)
+						if !di.isCollection(){ // todo delete
+							di = &DbInput{}
+							(*di).next = di
+						}
 					} else {
 						new := si.getDbInputFromRhs(arg)
 						(*di).appendTail(new)
@@ -872,7 +885,7 @@ func (si *Analyzer) getDbInputFromRhs(n ast.Node) *DbInput {
 
 func (si *Analyzer) AddDbCallPara(n string, t string){
 	switch t{
-	case "*sqlx.DB", "*sqlx.Tx", "sql.DbInterface":
+	case "*sqlx.DB", "*sqlx.Tx", "sql.DbInterface","kitSql.DbInterface":
 		{
 			if _, ok := si.dbCallPara[n]; !ok{
 				si.dbCallPara[n] = t
@@ -935,6 +948,16 @@ func (si *Analyzer) checkDbCall(node *ast.CallExpr, iType string, fName string){
 			di = si.analyzeDbCall(di, node, 1)
 		}
 		}
+	case "kitSql.DbInterface":{
+		switch fName{
+			case "Get":{
+				di = si.analyzeDbCall(di, node, 1)
+			}
+			case "Exec":{
+				di = si.analyzeDbCall(di, node, 0)
+			}
+			}
+	}
 	}	
 	
 	fmt.Println("final di is ")
@@ -955,7 +978,6 @@ func (si *Analyzer) Visit(n ast.Node) ast.Visitor {
 			si.catchError = true
         }
     }()
-
 	if n == nil{
 		si.upDateStateAfterPop()
 		//fmt.Printf("pop len is %d\n", si.caseStack.Len())
